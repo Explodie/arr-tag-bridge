@@ -32,26 +32,27 @@ arr-tag-bridge:
   build: ./arr-tag-bridge
   container_name: arr-tag-bridge
   restart: unless-stopped
-  environment:
-    - JF_URL=http://jellyfin:8096
-    - JF_API_KEY=your_jellyfin_api_key
-    - RADARR_URL=http://radarr:7878
-    - RADARR_API_KEY=your_radarr_api_key
-    - SONARR_URL=http://sonarr:8989
-    - SONARR_API_KEY=your_sonarr_api_key
+  env_file: .env
   networks:
     - your_arr_network
 ```
 
 Omit `SONARR_URL` / `SONARR_API_KEY` if you don't use Sonarr.
 
-### 3. Get API keys
+### 3. Configure environment
+
+```bash
+cp .env.example .env
+# Edit .env: fill in JF_API_KEY, RADARR_API_KEY, SONARR_API_KEY
+```
+
+### 4. Get API keys
 
 - **Jellyfin**: Dashboard → API Keys → "+" → name it "arr-tag-bridge"
 - **Radarr**: Settings → General → API Key
 - **Sonarr**: Settings → General → API Key
 
-### 4. Configure webhooks
+### 5. Configure webhooks
 
 **Radarr**: Settings → Connect → "+" → Webhook
 - URL: `http://arr-tag-bridge:5056/radarr`
@@ -60,7 +61,7 @@ Omit `SONARR_URL` / `SONARR_API_KEY` if you don't use Sonarr.
 
 **Sonarr**: Same but URL: `http://arr-tag-bridge:5056/sonarr`
 
-### 5. Bring it up
+### 6. Bring it up
 
 ```bash
 docker compose up -d --build arr-tag-bridge
