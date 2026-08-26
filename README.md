@@ -10,7 +10,7 @@ Triggered by *arr webhook on Import/Upgrade. Reads tags from Radarr/Sonarr API, 
 Jellyseerr → Radarr (tags: "13 - Alice")
                   │  webhook on Import/Upgrade
                   ▼
-         arr-tag-bridge:5055
+         arr-tag-bridge:5056
                   │  Jellyfin API
                   ▼
               Jellyfin  (tags visible in UI)
@@ -54,11 +54,11 @@ Omit `SONARR_URL` / `SONARR_API_KEY` if you don't use Sonarr.
 ### 4. Configure webhooks
 
 **Radarr**: Settings → Connect → "+" → Webhook
-- URL: `http://arr-tag-bridge:5055/radarr`
+- URL: `http://arr-tag-bridge:5056/radarr`
 - ✓ On Import Complete
 - ✓ On Upgrade
 
-**Sonarr**: Same but URL: `http://arr-tag-bridge:5055/sonarr`
+**Sonarr**: Same but URL: `http://arr-tag-bridge:5056/sonarr`
 
 ### 5. Bring it up
 
@@ -82,7 +82,7 @@ cd arr-tag-bridge && git pull && cd .. && docker compose up -d --build arr-tag-b
 | `RADARR_API_KEY` | Yes | Radarr API key |
 | `SONARR_URL` | No | Sonarr server URL |
 | `SONARR_API_KEY` | No | Sonarr API key |
-| `PORT` | No | Listen port (default 5055) |
+| `PORT` | No | Listen port (default 5056) |
 
 ## Verifying
 

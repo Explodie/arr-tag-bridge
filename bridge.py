@@ -214,6 +214,6 @@ def health():
 
 
 if __name__ == "__main__":
-    port = int(os.environ.get("PORT", "5055"))
+    port = int(os.environ.get("PORT", "5056"))
     log.info("arr-tag-bridge starting on :%d", port)
     app.run(host="0.0.0.0", port=port)
