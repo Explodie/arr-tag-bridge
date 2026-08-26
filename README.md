@@ -10,7 +10,7 @@ Triggered by *arr webhook on Import/Upgrade. Reads tags from Radarr/Sonarr API, 
 Jellyseerr → Radarr (tags: "13 - Alice")
                   │  webhook on Import/Upgrade
                   ▼
-         arr-tag-bridge:5056
+         localhost:5056
                   │  Jellyfin API
                   ▼
               Jellyfin  (tags visible in UI)
@@ -32,9 +32,10 @@ arr-tag-bridge:
   build: ./arr-tag-bridge
   container_name: arr-tag-bridge
   restart: unless-stopped
+  network_mode: "service:gluetun"
+  depends_on:
+    - gluetun
   env_file: .env
-  networks:
-    - your_arr_network
 ```
 
 Omit `SONARR_URL` / `SONARR_API_KEY` if you don't use Sonarr.
@@ -55,11 +56,11 @@ cp .env.example .env
 ### 5. Configure webhooks
 
 **Radarr**: Settings → Connect → "+" → Webhook
-- URL: `http://arr-tag-bridge:5056/radarr`
+- URL: `http://localhost:5056/radarr`
 - ✓ On Import Complete
 - ✓ On Upgrade
 
-**Sonarr**: Same but URL: `http://arr-tag-bridge:5056/sonarr`
+**Sonarr**: Same but URL: `http://localhost:5056/sonarr`
 
 ### 6. Bring it up
 
