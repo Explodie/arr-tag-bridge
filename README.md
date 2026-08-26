@@ -18,11 +18,18 @@ Jellyseerr → Radarr (tags: "13 - Alice")
 
 ## Setup
 
-### 1. Add to your docker-compose.yml
+### 1. Clone the repo
+
+```bash
+git clone git@github.com:Explodie/arr-tag-bridge.git
+# or HTTPS: git clone https://github.com/Explodie/arr-tag-bridge.git
+```
+
+### 2. Add to your docker-compose.yml
 
 ```yaml
 arr-tag-bridge:
-  image: ghcr.io/explodie/arr-tag-bridge:latest
+  build: ./arr-tag-bridge
   container_name: arr-tag-bridge
   restart: unless-stopped
   environment:
@@ -38,13 +45,13 @@ arr-tag-bridge:
 
 Omit `SONARR_URL` / `SONARR_API_KEY` if you don't use Sonarr.
 
-### 2. Get API keys
+### 3. Get API keys
 
 - **Jellyfin**: Dashboard → API Keys → "+" → name it "arr-tag-bridge"
 - **Radarr**: Settings → General → API Key
 - **Sonarr**: Settings → General → API Key
 
-### 3. Configure webhooks
+### 4. Configure webhooks
 
 **Radarr**: Settings → Connect → "+" → Webhook
 - URL: `http://arr-tag-bridge:5055/radarr`
@@ -53,12 +60,16 @@ Omit `SONARR_URL` / `SONARR_API_KEY` if you don't use Sonarr.
 
 **Sonarr**: Same but URL: `http://arr-tag-bridge:5055/sonarr`
 
-### 4. Bring it up
+### 5. Bring it up
 
 ```bash
-docker compose pull arr-tag-bridge
-docker compose up -d arr-tag-bridge
-docker compose logs arr-tag-bridge
+docker compose up -d --build arr-tag-bridge
+```
+
+### Updating
+
+```bash
+cd arr-tag-bridge && git pull && cd .. && docker compose up -d --build arr-tag-bridge
 ```
 
 ## Environment variables
