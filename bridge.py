@@ -42,7 +42,7 @@ class RetryItem(NamedTuple):
 class RetryQueue:
     def __init__(self, max_size=100):
         self.queue: list[tuple[RetryItem, int]] = []  # (item, attempt)
-        self.lock = threading.Lock()
+        self.lock = threading.RLock()
         self.max_size = max_size
         self.timer = None
 
