@@ -32,18 +32,11 @@ Deleting it only in Jellyfin will re-add it.
 
 ## Setup
 
-### 1. Clone the repo
-
-```bash
-git clone git@github.com:Explodie/arr-tag-bridge.git
-# or HTTPS: git clone https://github.com/Explodie/arr-tag-bridge.git
-```
-
-### 2. Add to your docker-compose.yml
+### 1. Add to your docker-compose.yml
 
 ```yaml
 arr-tag-bridge:
-  build: ./arr-tag-bridge
+  image: ghcr.io/explodie/arr-tag-bridge:latest
   container_name: arr-tag-bridge
   restart: unless-stopped
   network_mode: "service:gluetun"
@@ -52,22 +45,25 @@ arr-tag-bridge:
   env_file: .env
 ```
 
+No `build:` block, no local clone needed — the image is published to GHCR on
+every push to `main`.
+
 Omit `SONARR_URL` / `SONARR_API_KEY` if you don't use Sonarr.
 
-### 3. Configure environment
+### 2. Configure environment
 
 ```bash
 cp .env.example .env
 # Edit .env: fill in JF_API_KEY, RADARR_API_KEY, SONARR_API_KEY
 ```
 
-### 4. Get API keys
+### 3. Get API keys
 
 - **Jellyfin**: Dashboard → API Keys → "+" → name it "arr-tag-bridge"
 - **Radarr**: Settings → General → API Key
 - **Sonarr**: Settings → General → API Key
 
-### 5. Configure webhooks
+### 4. Configure webhooks
 
 **Radarr**: Settings → Connect → "+" → Webhook
 - URL: `http://localhost:5056/radarr`
@@ -76,17 +72,22 @@ cp .env.example .env
 
 **Sonarr**: Same but URL: `http://localhost:5056/sonarr`
 
-### 6. Bring it up
+### 5. Bring it up
 
 ```bash
-docker compose up -d --build arr-tag-bridge
+docker compose pull arr-tag-bridge
+docker compose up -d arr-tag-bridge
 ```
 
 ### Updating
 
 ```bash
-cd arr-tag-bridge && git pull && cd .. && docker compose up -d --build arr-tag-bridge
+docker compose pull arr-tag-bridge
+docker compose up -d arr-tag-bridge
 ```
+
+That's it — the new image is pulled and the container recreated. Same as every
+other published image in your stack.
 
 ## Environment variables
 

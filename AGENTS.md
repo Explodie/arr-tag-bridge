@@ -54,11 +54,16 @@ regex `^\d+-`.
 
 ## Deployment model
 
-- **Local build only.** `docker compose up -d --build`. No GHCR, no GitHub Actions
-  workflow, no registry. (History: removed early on, keep it gone.)
+- **Published image on GHCR.** `image: ghcr.io/explodie/arr-tag-bridge:latest`.
+  `.github/workflows/publish.yml` builds + pushes on every push to `main`
+  (tags: `latest` + git sha + branch/tag). No `build:` block on the host, no
+  local clone.
 - `network_mode: service:gluetun` — all service URLs are `localhost`.
-- Deploy path: local clone → edit → `git pull` on server → rebuild. Same pattern
-  as ztv_discord_bot.
+- Deploy path: push to `main` → CI publishes → `docker compose pull
+  arr-tag-bridge && docker compose up -d arr-tag-bridge` on the media server.
+- (History: started local-build `build: ./arr-tag-bridge`; reverted to GHCR
+  because the media server has no git/build access and every other service in
+  the stack pulls from a registry.)
 
 ## Files
 
