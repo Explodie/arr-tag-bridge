@@ -48,3 +48,32 @@ def test_jf_tags_404_returns_empty():
             mock_get.side_effect = http_error
             tags = bridge._jf_tags()
             assert tags == {}
+
+
+def test_ensure_tag_post_404_returns_none():
+    """_ensure_tag returns None when POST /Tags 404s."""
+    http_error = requests.HTTPError("404 Not Found")
+    http_error.response = Mock(status_code=404)
+
+    with patch.object(bridge, '_tag_cache', None):
+        with patch('bridge.requests.get') as mock_get:
+            # _jf_tags also 404s -> empty dict
+            mock_get.side_effect = http_error
+            with patch('bridge.requests.post') as mock_post:
+                mock_post.side_effect = http_error
+                tid = bridge._ensure_tag("1-richard")
+                assert tid is None
+
+
+def test_add_tag_fallback_uses_tagname():
+    """_add_tag uses tagName param when _ensure_tag returns None."""
+    with patch.object(bridge, '_ensure_tag', return_value=None):
+        with patch('bridge.requests.post') as mock_post:
+            mock_resp = Mock()
+            mock_post.return_value = mock_resp
+
+            bridge._add_tag("item-123", "1-richard")
+
+            _, kwargs = mock_post.call_args
+            assert kwargs["params"]["tagName"] == "1-richard"
+            assert "tagId" not in kwargs["params"]

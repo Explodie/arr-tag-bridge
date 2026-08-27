@@ -16,7 +16,7 @@ import requests
 import time
 import threading
 from flask import Flask, request, jsonify
-from typing import NamedTuple
+from typing import NamedTuple, Optional
 
 app = Flask(__name__)
 logging.basicConfig(
@@ -161,32 +161,47 @@ def _jf_tags() -> dict[str, str]:
     return {}
 
 
-def _ensure_tag(name: str) -> str:
-    """Get or create a Jellyfin tag; return its Id."""
+def _ensure_tag(name: str) -> Optional[str]:
+    """Get or create a Jellyfin tag; return its Id or None if /Tags is disabled."""
     tags = _jf_tags()
     if name in tags:
         return tags[name]
     log.info("Creating Jellyfin tag: %s", name)
-    r = requests.post(
-        f"{JF_URL}/Tags",
-        json={"Name": name},
-        params={"api_key": JF_API_KEY},
-        headers={"Content-Type": "application/json"},
-        timeout=10,
-    )
-    r.raise_for_status()
-    tid: str = r.json()["Id"]
-    tags[name] = tid
-    return tid
+    try:
+        r = requests.post(
+            f"{JF_URL}/Tags",
+            json={"Name": name},
+            params={"api_key": JF_API_KEY},
+            headers={"Content-Type": "application/json"},
+            timeout=10,
+        )
+        r.raise_for_status()
+        tid = r.json()["Id"]
+        tags[name] = tid
+        return tid
+    except requests.HTTPError as e:
+        if e.response.status_code == 404:
+            log.warning("/Tags endpoint disabled - falling back to tagName method")
+            return None
+        raise
 
 
 def _add_tag(item_id: str, tag_name: str) -> None:
+    """Add tag to item, trying tagId first then tagName if /Tags is disabled."""
     tid = _ensure_tag(tag_name)
-    requests.post(
-        f"{JF_URL}/Items/{item_id}/Tags/Add",
-        params={"tagId": tid, "api_key": JF_API_KEY},
-        timeout=10,
-    ).raise_for_status()
+    if tid is not None:
+        r = requests.post(
+            f"{JF_URL}/Items/{item_id}/Tags/Add",
+            params={"tagId": tid, "api_key": JF_API_KEY},
+            timeout=10,
+        )
+    else:
+        r = requests.post(
+            f"{JF_URL}/Items/{item_id}/Tags/Add",
+            params={"tagName": tag_name, "api_key": JF_API_KEY},
+            timeout=10,
+        )
+    r.raise_for_status()
 
 
 def _remove_tag(item_id: str, tag_name: str) -> None:
