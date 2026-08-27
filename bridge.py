@@ -200,14 +200,26 @@ def _remove_tag(item_id: str, tag_name: str) -> None:
 
 
 def _jf_item_tags(item_id: str) -> set[str]:
-    """Return the set of tag names currently on a Jellyfin item."""
-    r = requests.get(
-        f"{JF_URL}/Items/{item_id}",
-        params={"api_key": JF_API_KEY},
-        timeout=10,
-    )
-    r.raise_for_status()
-    return set(r.json().get("Tags", []))
+    """Return the set of tag names currently on a Jellyfin item.
+
+    Returns an empty set when the item can't be fetched (e.g. the ID
+    returned by search doesn't resolve to a local library item yet —
+    Jellyfin can return 400 in that case).  The caller treats an empty
+    result as "no tags" and adds all desired tags; Tags/Add is
+    idempotent so duplicates are harmless.  Stale-tag removal is
+    temporarily skipped when the get-item endpoint is unavailable.
+    """
+    try:
+        r = requests.get(
+            f"{JF_URL}/Items/{item_id}",
+            params={"api_key": JF_API_KEY},
+            timeout=10,
+        )
+        r.raise_for_status()
+        return set(r.json().get("Tags", []))
+    except requests.HTTPError as e:
+        log.warning("Cannot read tags for item %s — returning empty: %s", item_id, e)
+        return set()
 
 
 def _find_item(title: str, year: int | None, kind: str):  # -> dict | None

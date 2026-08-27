@@ -49,8 +49,11 @@ regex `^\d+-`.
 - **`_jf_tags()` cache is busted only on create** (`_ensure_tag` mutates the
   returned dict). Never add logic that invalidates tags elsewhere without busting
   the cache.
-- **Race:** Radarr fires the webhook the moment it imports the file; Jellyfin may
-  not have scanned yet. That's what `RetryQueue` exists for. Do not remove it.
+- **Jellyfin `/Items/{itemId}` GET may return 400** when the item ID
+  comes from search but isn't yet in the local library. `_jf_item_tags`
+  catches this and returns empty set — reconcile adds all desired tags
+  (idempotent) but won't remove stale ones on that run. Stale cleanup
+  resumes when the get-item endpoint works again.
 
 ## Deployment model
 
