@@ -39,21 +39,31 @@ regex `^\d+-`.
 - Stateless: no DB, no volume. Retry queue is in-memory (`RetryQueue`, max 100,
   backoff 15s/45s/2m). A restart loses pending retries — acceptable: scan lag is
   seconds, and losing a pending retry beats silently dropping every racing request.
-- `_tag_cache` is a module-level dict guarded by `threading.Lock()`.
+- **Tags are plain string arrays on the Jellyfin item object** — no tag IDs, no
+  `/Tags` endpoint, no `Tags/Add` or `Tags/Delete` sub-routes (all removed in
+  Jellyfin 10.11).  The bridge reads tags from the search result (`fields=Tags`
+  on `GET /Items?searchTerm=...`) and writes the merged array via a single
+  `POST /Items/{itemId}` per item.
+- `_merge_tags_for_item` is the core logic: preserves non-requester tags,
+  adds/removes only `^\d+-` format tags, produces the sorted array for the
+  `POST` body.
 
 ## Known pitfalls
 
 - **Item matching is title+year heuristic** (`_find_item`). Remakes/specials can
   mismatch. Reconcile logs only summary counts, so a bad match is quiet — verify
   suspicious items manually.
-- **`_jf_tags()` cache is busted only on create** (`_ensure_tag` mutates the
-  returned dict). Never add logic that invalidates tags elsewhere without busting
-  the cache.
-- **Jellyfin `/Items/{itemId}` GET may return 400** when the item ID
-  comes from search but isn't yet in the local library. `_jf_item_tags`
-  catches this and returns empty set — reconcile adds all desired tags
-  (idempotent) but won't remove stale ones on that run. Stale cleanup
-  resumes when the get-item endpoint works again.
+- **Jellyfin 10.11 removed all tag sub-endpoints.** `GET/POST /Tags`,
+  `Tags/Add`, `Tags/Delete`, and `GET /Items/{id}` are all gone. The only
+  working operations are search (`GET /Items?searchTerm=...&fields=Tags`)
+  and ItemUpdate (`POST /Items/{id}` with `{"Tags": [...]}`). Do not
+  reintroduce the old endpoints.
+- **Single POST per item** — tag writes are one API call: the full merged
+  Tags array is POSTed in one shot. Per-tag calls (`_add_tag` per tag name)
+  don't exist anymore. This means every write touches every tag on the item;
+  non-requester tags are always preserved via `_merge_tags_for_item`.
+- **Race:** Radarr fires the webhook the moment it imports the file; Jellyfin may
+  not have scanned yet. That's what `RetryQueue` exists for. Do not remove it.
 
 ## Deployment model
 
@@ -77,7 +87,7 @@ regex `^\d+-`.
 | `requirements.txt` | flask + requests |
 | `.env.example` | localhost URLs template |
 | `README.md` | User-facing setup/verify |
-| `test_retry_queue.py`, `test_retry_queue_drain.py`, `test_reconcile.py` | pytest regression tests |
+| `test_retry_queue.py`, `test_retry_queue_drain.py`, `test_reconcile.py`, `test_jellyfin_api.py` | pytest regression tests |
 
 ## Verification
 
