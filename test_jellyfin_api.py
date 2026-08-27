@@ -35,3 +35,16 @@ def test_jf_item_tags_400_returns_empty():
         mock_get.side_effect = http_error
         tags = bridge._jf_item_tags("bad-id")
         assert tags == set()
+
+
+def test_jf_tags_404_returns_empty():
+    """_jf_tags returns empty dict on 404 — doesn't crash reconcile."""
+    # Reset cache so we hit the endpoint
+    with patch.object(bridge, '_tag_cache', None):
+        http_error = requests.HTTPError("404 Not Found")
+        http_error.response = Mock(status_code=404)
+
+        with patch('bridge.requests.get') as mock_get:
+            mock_get.side_effect = http_error
+            tags = bridge._jf_tags()
+            assert tags == {}

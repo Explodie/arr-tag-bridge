@@ -133,13 +133,17 @@ _tag_cache_lock = threading.Lock()
 # ── jellyfin helpers ──────────────────────────────────────────────────
 
 def _jf_tags() -> dict[str, str]:
-    """Return {TagName: TagId} for all Jellyfin tags."""
+    """Return {TagName: TagId} for all Jellyfin tags.
+
+    Returns an empty dict when the /Tags endpoint is unavailable (Jellyfin
+    10.9+ may disable the GET-all-tags endpoint).  Callers fall back to
+    creating tags one-by-one via POST /Tags, which still works.
+    """
     global _tag_cache
     with _tag_cache_lock:
         if _tag_cache is not None:
             return _tag_cache
 
-    # New retry logic for API calls
     for attempt in range(3):
         try:
             r = requests.get(f"{JF_URL}/Tags", params={"api_key": JF_API_KEY}, timeout=10)
@@ -149,12 +153,12 @@ def _jf_tags() -> dict[str, str]:
                 _tag_cache = tags
             return tags
         except requests.RequestException as e:
-            if attempt == 2:
-                raise
             wait = 1 + (attempt * 2)
             log.warning("Retry #%d/3 for tags fetch in %ds: %s", attempt+1, wait, e)
-            time.sleep(wait)
-    return {}  # unreachable but keeps type checker happy
+            if attempt < 2:
+                time.sleep(wait)
+    log.warning("Could not fetch tags — /Tags endpoint unavailable, using fallback")
+    return {}
 
 
 def _ensure_tag(name: str) -> str:
