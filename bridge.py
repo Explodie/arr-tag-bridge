@@ -91,6 +91,7 @@ class RetryQueue:
                 for tag in item.tag_names:
                     _add_tag(found["Id"], tag)
                 log.info("✓ Retry success for '%s'", item.title)
+                self._schedule_next()
                 return
             
             # Still missing — requeue or give up
@@ -101,6 +102,7 @@ class RetryQueue:
                     self._schedule_next()
                 else:
                     log.error("'%s' failed after %d retries — giving up", item.title, attempt + 1)
+                    self._schedule_next()
         except Exception as e:
             log.error("Retry failed for '%s': %s", item.title, e)
             with self.lock:
