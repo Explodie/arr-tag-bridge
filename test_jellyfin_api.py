@@ -1,4 +1,9 @@
 """Test Jellyfin API calls with mocks."""
+import os
+
+os.environ.setdefault("JF_URL", "http://localhost:8096")
+os.environ.setdefault("JF_API_KEY", "test-key")
+
 import pytest
 from unittest.mock import patch, Mock
 
