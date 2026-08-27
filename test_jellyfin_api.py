@@ -1,4 +1,4 @@
-"""Test Jellyfin API calls with mocks."""
+"""Test Jellyfin API calls with mocks.  Jellyfin 10.11: only search + POST /Items/{id}."""
 import os
 
 os.environ.setdefault("JF_URL", "http://localhost:8096")
@@ -11,69 +11,76 @@ import requests
 import bridge
 
 
-def test_jf_item_tags_normal():
-    """_jf_item_tags returns tag names from the item object."""
+# -- _find_item --------------------------------------------------------
+
+def test_find_item_includes_fields_tags():
+    """_find_item sends fields=Tags to get tags in search result."""
     with patch('bridge.requests.get') as mock_get:
         mock_resp = Mock()
-        mock_resp.json.return_value = {"Tags": ["1-richard", "2-alice"]}
+        mock_resp.json.return_value = {"Items": [{"Id": "abc", "Tags": ["1-richard"]}]}
         mock_get.return_value = mock_resp
 
-        tags = bridge._jf_item_tags("test-id")
-        assert tags == {"1-richard", "2-alice"}
+        item = bridge._find_item("The Patriot", 2000, "Movie")
+        assert item is not None
+        assert item["Tags"] == ["1-richard"]
 
         _, kwargs = mock_get.call_args
-        assert "fields" not in kwargs["params"]
+        assert kwargs["params"]["fields"] == "Tags"
         assert "api_key" in kwargs["params"]
 
 
-def test_jf_item_tags_400_returns_empty():
-    """_jf_item_tags returns empty set on 400 — doesn't crash reconcile."""
+# -- _merge_tags_for_item ----------------------------------------------
+
+def test_merge_tags_preserves_non_requester():
+    """Non-requester tags pass through unchanged."""
+    result = bridge._merge_tags_for_item(
+        ["genre-action", "1-richard"],
+        ["2-alice"],
+        [],
+    )
+    assert "genre-action" in result
+    assert "1-richard" in result
+    assert "2-alice" in result
+
+
+def test_merge_tags_removes_stale():
+    result = bridge._merge_tags_for_item(
+        ["1-richard", "2-alice"],
+        [],
+        ["1-richard"],
+    )
+    assert "1-richard" not in result
+    assert "2-alice" in result
+
+
+def test_merge_tags_idempotent():
+    result = bridge._merge_tags_for_item(
+        ["1-richard"],
+        ["1-richard"],
+        [],
+    )
+    assert result == ["1-richard"]
+
+
+# -- _post_item_tags ---------------------------------------------------
+
+def test_post_item_tags_sends_tags_array():
+    with patch('bridge.requests.post') as mock_post:
+        mock_resp = Mock()
+        mock_post.return_value = mock_resp
+
+        bridge._post_item_tags("item-123", ["1-richard", "2-alice"])
+
+        _, kwargs = mock_post.call_args
+        assert kwargs["json"]["Tags"] == ["1-richard", "2-alice"]
+        assert kwargs["json"]["Id"] == "item-123"
+
+
+def test_post_item_tags_raises_on_error():
     http_error = requests.HTTPError("400 Bad Request")
     http_error.response = Mock(status_code=400)
 
-    with patch('bridge.requests.get') as mock_get:
-        mock_get.side_effect = http_error
-        tags = bridge._jf_item_tags("bad-id")
-        assert tags == set()
-
-
-def test_jf_tags_404_returns_empty():
-    """_jf_tags returns empty dict on 404 — doesn't crash reconcile."""
-    # Reset cache so we hit the endpoint
-    with patch.object(bridge, '_tag_cache', None):
-        http_error = requests.HTTPError("404 Not Found")
-        http_error.response = Mock(status_code=404)
-
-        with patch('bridge.requests.get') as mock_get:
-            mock_get.side_effect = http_error
-            tags = bridge._jf_tags()
-            assert tags == {}
-
-
-def test_ensure_tag_post_404_returns_none():
-    """_ensure_tag returns None when POST /Tags 404s."""
-    http_error = requests.HTTPError("404 Not Found")
-    http_error.response = Mock(status_code=404)
-
-    with patch.object(bridge, '_tag_cache', None):
-        with patch('bridge.requests.get') as mock_get:
-            # _jf_tags also 404s -> empty dict
-            mock_get.side_effect = http_error
-            with patch('bridge.requests.post') as mock_post:
-                mock_post.side_effect = http_error
-                tid = bridge._ensure_tag("1-richard")
-                assert tid is None
-
-
-def test_add_tag_fallback_uses_tagname():
-    """_add_tag uses tagName param when _ensure_tag returns None."""
-    with patch.object(bridge, '_ensure_tag', return_value=None):
-        with patch('bridge.requests.post') as mock_post:
-            mock_resp = Mock()
-            mock_post.return_value = mock_resp
-
-            bridge._add_tag("item-123", "1-richard")
-
-            _, kwargs = mock_post.call_args
-            assert kwargs["params"]["tagName"] == "1-richard"
-            assert "tagId" not in kwargs["params"]
+    with patch('bridge.requests.post') as mock_post:
+        mock_post.side_effect = http_error
+        with pytest.raises(requests.HTTPError):
+            bridge._post_item_tags("bad-id", [])

@@ -5,36 +5,35 @@ item. If it returns without _schedule_next(), items 2..N sit in the queue
 forever (timer is already None after pop).
 """
 import os
+import time
 
 os.environ.setdefault("JF_URL", "http://localhost:8096")
 os.environ.setdefault("JF_API_KEY", "test-key")
-
-import time
 
 import bridge
 
 
 def test_queue_drains_all_items_on_success(monkeypatch):
     """Two items queued; _find_item succeeds -> BOTH must get tag-add."""
-    added = []
+    posted = []
 
-    fake_item = {"Id": "jf-123", "ProductionYear": 2024}
+    fake_item = {"Id": "jf-123", "ProductionYear": 2024, "Tags": []}
 
     monkeypatch.setattr(bridge, "_find_item", lambda title, year, kind: fake_item)
     monkeypatch.setattr(
-        bridge, "_add_tag", lambda item_id, tag: added.append((item_id, tag))
+        bridge, "_post_item_tags", lambda item_id, tags: posted.append((item_id, tags))
     )
     monkeypatch.setattr(bridge.RetryQueue, "_next_delay", lambda self: 0)
 
     q = bridge.RetryQueue(max_size=10)
-    q.add(bridge.RetryItem("Movie One", 2024, "Movie", ["tag-a"]))
-    q.add(bridge.RetryItem("Movie Two", 2024, "Movie", ["tag-b"]))
+    q.add(bridge.RetryItem("Movie One", 2024, "Movie", ["1-tag-a"]))
+    q.add(bridge.RetryItem("Movie Two", 2024, "Movie", ["1-tag-b"]))
 
     deadline = time.time() + 5
-    while time.time() < deadline and len(added) < 2:
+    while time.time() < deadline and len(posted) < 2:
         time.sleep(0.05)
 
-    assert len(added) == 2, f"expected both items drained, got {added}"
+    assert len(posted) == 2, f"expected both items drained, got {posted}"
     assert q.queue == [], f"queue should be empty after drain, got {q.queue}"
 
 
@@ -50,11 +49,9 @@ def test_queue_drains_after_give_up(monkeypatch):
     monkeypatch.setattr(bridge.RetryQueue, "_next_delay", lambda self: 0)
 
     q = bridge.RetryQueue(max_size=10)
-    q.add(bridge.RetryItem("Movie One", 2024, "Movie", ["tag-a"]))
-    q.add(bridge.RetryItem("Movie Two", 2024, "Movie", ["tag-b"]))
+    q.add(bridge.RetryItem("Movie One", 2024, "Movie", ["1-tag-a"]))
+    q.add(bridge.RetryItem("Movie Two", 2024, "Movie", ["1-tag-b"]))
 
-    # Each item gets up to 3 attempts (attempt 0,1,2) before giving up.
-    # Give-up path must then schedule the next item.
     deadline = time.time() + 5
     while time.time() < deadline and attempts["count"] < 6:
         time.sleep(0.05)
