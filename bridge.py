@@ -2,14 +2,17 @@
 arr-tag-bridge: Syncs Radarr/Sonarr tags into Jellyfin.
 Triggered by *arr webhook on Import/Upgrade.
 
-Listens on :5055. Radarr → /radarr, Sonarr → /sonarr.
+Listens on :5056. Radarr → /radarr, Sonarr → /sonarr.
 Config via env vars (see README).
 """
 
 import os
 import logging
 import requests
+import time
+import threading
 from flask import Flask, request, jsonify
+from typing import NamedTuple
 
 app = Flask(__name__)
 logging.basicConfig(
@@ -28,8 +31,87 @@ RADARR_KEY  = os.environ.get("RADARR_API_KEY", "")
 SONARR_URL  = os.environ.get("SONARR_URL", "").rstrip("/")
 SONARR_KEY  = os.environ.get("SONARR_API_KEY", "")
 
-# simple in-memory cache for tag-name → tag-id (busted on create only)
+# ── retry queue ────────────────────────────────────────────────────
+
+class RetryItem(NamedTuple):
+    title: str
+    year: int | None
+    kind: str
+    tag_names: list[str]
+
+class RetryQueue:
+    def __init__(self, max_size=100):
+        self.queue: list[tuple[RetryItem, int]] = []  # (item, attempt)
+        self.lock = threading.Lock()
+        self.max_size = max_size
+        self.timer = None
+
+    def add(self, item: RetryItem) -> bool:
+        """Add item to queue. Returns False if queue full."""
+        with self.lock:
+            if len(self.queue) >= self.max_size:
+                log.error("Retry queue full — dropping deferred tag for '%s'", item.title)
+                return False
+            self.queue.append((item, 0))
+            self._schedule_next()
+            return True
+
+    def _schedule_next(self) -> None:
+        """Schedule next retry if not already pending."""
+        with self.lock:
+            if self.timer or not self.queue:
+                return
+            delay = self._next_delay()
+            self.timer = threading.Timer(delay, self._retry_next)
+            self.timer.start()
+            log.debug("Scheduled retry in %.1f seconds", delay)
+
+    def _next_delay(self) -> int:
+        """Backoff: 15s → 45s → 2m."""
+        if not self.queue:
+            return 0
+        _, attempt = self.queue[0]
+        return [15, 45, 120][min(attempt, 2)]
+
+    def _retry_next(self) -> None:
+        """Process next item in queue."""
+        with self.lock:
+            if not self.queue:
+                self.timer = None
+                return
+            
+            item, attempt = self.queue.pop(0)
+            self.timer = None
+
+        # Re-attempt outside lock to avoid holding during I/O
+        try:
+            log.info("Retry #%d for '%s'", attempt + 1, item.title)
+            found = _find_item(item.title, item.year, item.kind)
+            if found:
+                for tag in item.tag_names:
+                    _add_tag(found["Id"], tag)
+                log.info("✓ Retry success for '%s'", item.title)
+                return
+            
+            # Still missing — requeue or give up
+            with self.lock:
+                if attempt < 2:
+                    self.queue.append((item, attempt + 1))
+                    log.warning("'%s' still not found — will retry again", item.title)
+                    self._schedule_next()
+                else:
+                    log.error("'%s' failed after %d retries — giving up", item.title, attempt + 1)
+        except Exception as e:
+            log.error("Retry failed for '%s': %s", item.title, e)
+            with self.lock:
+                self.queue.append((item, attempt))  # Try again later
+                self._schedule_next()
+
+retry_queue = RetryQueue()
+
+# simple in-memory cache for tag-name → tag-id (busted on create only), with thread-safe access
 _tag_cache: dict[str, str] | None = None
+_tag_cache_lock = threading.Lock()
 
 
 # ── jellyfin helpers ──────────────────────────────────────────────────
@@ -37,12 +119,26 @@ _tag_cache: dict[str, str] | None = None
 def _jf_tags() -> dict[str, str]:
     """Return {TagName: TagId} for all Jellyfin tags."""
     global _tag_cache
-    if _tag_cache is not None:
-        return _tag_cache
-    r = requests.get(f"{JF_URL}/Tags", params={"api_key": JF_API_KEY}, timeout=10)
-    r.raise_for_status()
-    _tag_cache = {t["Name"]: t["Id"] for t in r.json().get("Items", [])}
-    return _tag_cache
+    with _tag_cache_lock:
+        if _tag_cache is not None:
+            return _tag_cache
+
+    # New retry logic for API calls
+    for attempt in range(3):
+        try:
+            r = requests.get(f"{JF_URL}/Tags", params={"api_key": JF_API_KEY}, timeout=10)
+            r.raise_for_status()
+            tags = {t["Name"]: t["Id"] for t in r.json().get("Items", [])}
+            with _tag_cache_lock:
+                _tag_cache = tags
+            return tags
+        except requests.RequestException as e:
+            if attempt == 2:
+                raise
+            wait = 1 + (attempt * 2)
+            log.warning("Retry #%d/3 for tags fetch in %ds: %s", attempt+1, wait, e)
+            time.sleep(wait)
+    return {}  # unreachable but keeps type checker happy
 
 
 def _ensure_tag(name: str) -> str:
@@ -154,7 +250,9 @@ def radarr_webhook():
     item = _find_item(title, year, "Movie")
     if not item:
         log.warning("'%s' not found in Jellyfin (race with library scan?)", title)
-        return jsonify({"status": "deferred", "reason": "not found in Jellyfin"})
+        if not retry_queue.add(RetryItem(title, year, "Movie", names)):
+            return jsonify({"status": "failed", "reason": "queue full"})
+        return jsonify({"status": "deferred", "reason": "queued for retry"})
 
     for tag in names:
         _add_tag(item["Id"], tag)
@@ -199,7 +297,9 @@ def sonarr_webhook():
     item = _find_item(title, year, "Series")
     if not item:
         log.warning("'%s' not found in Jellyfin", title)
-        return jsonify({"status": "deferred", "reason": "not found in Jellyfin"})
+        if not retry_queue.add(RetryItem(title, year, "Series", names)):
+            return jsonify({"status": "failed", "reason": "queue full"})
+        return jsonify({"status": "deferred", "reason": "queued for retry"})
 
     for tag in names:
         _add_tag(item["Id"], tag)
