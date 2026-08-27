@@ -203,7 +203,7 @@ def _jf_item_tags(item_id: str) -> set[str]:
     """Return the set of tag names currently on a Jellyfin item."""
     r = requests.get(
         f"{JF_URL}/Items/{item_id}",
-        params={"api_key": JF_API_KEY, "fields": "Tags"},
+        params={"api_key": JF_API_KEY},
         timeout=10,
     )
     r.raise_for_status()
