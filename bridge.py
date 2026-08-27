@@ -1,12 +1,16 @@
 """
-arr-tag-bridge: Syncs Radarr/Sonarr tags into Jellyfin.
-Triggered by *arr webhook on Import/Upgrade.
+arr-tag-bridge: Syncs Radarr/Sonarr requester tags into Jellyfin.
+Triggered by *arr webhook on Import/Upgrade; also reconciles on startup.
 
 Listens on :5056. Radarr → /radarr, Sonarr → /sonarr.
 Config via env vars (see README).
+
+Only Seerr "requester" tags are managed — label format "{userID}-{DisplayName}"
+(e.g. "1-richard"). Every other tag on an item is left untouched.
 """
 
 import os
+import re
 import logging
 import requests
 import time
@@ -30,6 +34,16 @@ RADARR_KEY  = os.environ.get("RADARR_API_KEY", "")
 
 SONARR_URL  = os.environ.get("SONARR_URL", "").rstrip("/")
 SONARR_KEY  = os.environ.get("SONARR_API_KEY", "")
+
+# ── requester-tag detection ──────────────────────────────────────────
+# Seerr tags look like "{userID}-{DisplayName}", e.g. "1-richard".
+# The bridge only manages tags matching this pattern — everything else is ignored.
+REQUESTER_TAG_RE = re.compile(r"^\d+-")
+
+
+def _is_requester_tag(name: str) -> bool:
+    return bool(REQUESTER_TAG_RE.match(name))
+
 
 # ── retry queue ────────────────────────────────────────────────────
 
@@ -79,7 +93,7 @@ class RetryQueue:
             if not self.queue:
                 self.timer = None
                 return
-            
+
             item, attempt = self.queue.pop(0)
             self.timer = None
 
@@ -93,7 +107,7 @@ class RetryQueue:
                 log.info("✓ Retry success for '%s'", item.title)
                 self._schedule_next()
                 return
-            
+
             # Still missing — requeue or give up
             with self.lock:
                 if attempt < 2:
@@ -171,6 +185,31 @@ def _add_tag(item_id: str, tag_name: str) -> None:
     ).raise_for_status()
 
 
+def _remove_tag(item_id: str, tag_name: str) -> None:
+    """Detach a tag from an item (does not delete the tag globally)."""
+    tags = _jf_tags()
+    tid = tags.get(tag_name)
+    if not tid:
+        log.warning("Tag '%s' not found in Jellyfin — nothing to remove", tag_name)
+        return
+    requests.post(
+        f"{JF_URL}/Items/{item_id}/Tags/Delete",
+        params={"tagId": tid, "api_key": JF_API_KEY},
+        timeout=10,
+    ).raise_for_status()
+
+
+def _jf_item_tags(item_id: str) -> set[str]:
+    """Return the set of tag names currently on a Jellyfin item."""
+    r = requests.get(
+        f"{JF_URL}/Items/{item_id}",
+        params={"api_key": JF_API_KEY, "fields": "Tags"},
+        timeout=10,
+    )
+    r.raise_for_status()
+    return set(r.json().get("Tags", []))
+
+
 def _find_item(title: str, year: int | None, kind: str):  # -> dict | None
     """Search Jellyfin for a Movie or Series by title + year."""
     params: dict = {
@@ -195,22 +234,107 @@ def _find_item(title: str, year: int | None, kind: str):  # -> dict | None
 
 # ── *arr tag resolution ───────────────────────────────────────────────
 
+def _radarr_tag_lut() -> dict[int, str]:
+    r = requests.get(f"{RADARR_URL}/api/v3/tag", params={"apikey": RADARR_KEY}, timeout=10)
+    r.raise_for_status()
+    return {t["id"]: t["label"] for t in r.json()}
+
+
+def _sonarr_tag_lut() -> dict[int, str]:
+    r = requests.get(f"{SONARR_URL}/api/v3/tag", params={"apikey": SONARR_KEY}, timeout=10)
+    r.raise_for_status()
+    return {t["id"]: t["label"] for t in r.json()}
+
+
 def _radarr_tag_names(tag_ids: list[int]) -> list[str]:
     if not tag_ids or not RADARR_URL:
         return []
-    r = requests.get(f"{RADARR_URL}/api/v3/tag", params={"apikey": RADARR_KEY}, timeout=10)
-    r.raise_for_status()
-    lut = {t["id"]: t["label"] for t in r.json()}
+    lut = _radarr_tag_lut()
     return [lut.get(tid, f"tag-{tid}") for tid in tag_ids]
 
 
 def _sonarr_tag_names(tag_ids: list[int]) -> list[str]:
     if not tag_ids or not SONARR_URL:
         return []
-    r = requests.get(f"{SONARR_URL}/api/v3/tag", params={"apikey": SONARR_KEY}, timeout=10)
-    r.raise_for_status()
-    lut = {t["id"]: t["label"] for t in r.json()}
+    lut = _sonarr_tag_lut()
     return [lut.get(tid, f"tag-{tid}") for tid in tag_ids]
+
+
+# ── reconcile + startup backfill ─────────────────────────────────────
+
+def _reconcile_item(title: str, year: int | None, kind: str, desired: list[str]) -> tuple[int, int]:
+    """Make the item's requester tags match `desired`. Returns (added, removed).
+
+    Only requester-format tags are ever added or removed; any other tag on the
+    Jellyfin item is left alone.
+    """
+    item = _find_item(title, year, kind)
+    if not item:
+        log.debug("Backfill: '%s' (%s) not in Jellyfin yet — skipped", title, year)
+        return 0, 0
+
+    item_id = item["Id"]
+    desired_set = {t for t in desired if _is_requester_tag(t)}
+    current = {t for t in _jf_item_tags(item_id) if _is_requester_tag(t)}
+
+    added = removed = 0
+    for t in sorted(desired_set - current):
+        _add_tag(item_id, t)
+        added += 1
+    for t in sorted(current - desired_set):
+        _remove_tag(item_id, t)
+        removed += 1
+
+    if added or removed:
+        log.info("Reconcile '%s': +%d -%d", title, added, removed)
+    return added, removed
+
+
+def _backfill_reconcile() -> None:
+    """Reconcile requester tags across the whole *arr library (startup)."""
+    seen = added = removed = 0
+
+    if RADARR_URL and RADARR_KEY:
+        try:
+            lut = _radarr_tag_lut()
+            r = requests.get(f"{RADARR_URL}/api/v3/movie", params={"apikey": RADARR_KEY}, timeout=30)
+            r.raise_for_status()
+            for m in r.json():
+                names = [lut.get(tid, f"tag-{tid}") for tid in m.get("tags", [])]
+                names = [n for n in names if _is_requester_tag(n)]
+                if not names:
+                    continue
+                seen += 1
+                a, d = _reconcile_item(m.get("title", "Unknown"), m.get("year"), "Movie", names)
+                added += a
+                removed += d
+        except Exception as e:
+            log.error("Radarr backfill failed: %s", e)
+
+    if SONARR_URL and SONARR_KEY:
+        try:
+            lut = _sonarr_tag_lut()
+            r = requests.get(f"{SONARR_URL}/api/v3/series", params={"apikey": SONARR_KEY}, timeout=30)
+            r.raise_for_status()
+            for s in r.json():
+                names = [lut.get(tid, f"tag-{tid}") for tid in s.get("tags", [])]
+                names = [n for n in names if _is_requester_tag(n)]
+                if not names:
+                    continue
+                seen += 1
+                a, d = _reconcile_item(s.get("title", "Unknown"), s.get("year"), "Series", names)
+                added += a
+                removed += d
+        except Exception as e:
+            log.error("Sonarr backfill failed: %s", e)
+
+    log.info("Startup backfill complete: %d items, +%d tags, -%d tags", seen, added, removed)
+
+
+def _startup_backfill() -> None:
+    """Give Jellyfin/*arr a moment to come up, then run the initial reconcile."""
+    time.sleep(20)
+    _backfill_reconcile()
 
 
 # ── webhook handlers ──────────────────────────────────────────────────
@@ -242,12 +366,11 @@ def radarr_webhook():
     r.raise_for_status()
     tag_ids: list[int] = r.json().get("tags", [])
 
-    if not tag_ids:
-        log.info("No tags — nothing to sync")
-        return jsonify({"status": "ok", "synced": False, "reason": "no tags"})
-
-    names = _radarr_tag_names(tag_ids)
-    log.info("Tags: %s", names)
+    names = [n for n in _radarr_tag_names(tag_ids) if _is_requester_tag(n)]
+    if not names:
+        log.info("No requester tags — nothing to sync")
+        return jsonify({"status": "ok", "synced": False, "reason": "no requester tags"})
+    log.info("Requester tags: %s", names)
 
     item = _find_item(title, year, "Movie")
     if not item:
@@ -289,12 +412,11 @@ def sonarr_webhook():
     r.raise_for_status()
     tag_ids: list[int] = r.json().get("tags", [])
 
-    if not tag_ids:
-        log.info("No tags — nothing to sync")
-        return jsonify({"status": "ok", "synced": False, "reason": "no tags"})
-
-    names = _sonarr_tag_names(tag_ids)
-    log.info("Tags: %s", names)
+    names = [n for n in _sonarr_tag_names(tag_ids) if _is_requester_tag(n)]
+    if not names:
+        log.info("No requester tags — nothing to sync")
+        return jsonify({"status": "ok", "synced": False, "reason": "no requester tags"})
+    log.info("Requester tags: %s", names)
 
     item = _find_item(title, year, "Series")
     if not item:
@@ -318,4 +440,5 @@ def health():
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", "5056"))
     log.info("arr-tag-bridge starting on :%d", port)
+    threading.Thread(target=_startup_backfill, daemon=True, name="backfill").start()
     app.run(host="0.0.0.0", port=port)

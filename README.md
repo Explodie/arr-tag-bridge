@@ -2,19 +2,33 @@
 
 Syncs Radarr/Sonarr requester tags into Jellyfin.
 
-Triggered by *arr webhook on Import/Upgrade. Reads tags from Radarr/Sonarr API, writes them into Jellyfin as item tags.
+Two triggers:
+- **Webhook** on *arr Import/Upgrade (the fast path).
+- **Startup reconcile** — on boot, walks the whole *arr library and makes Jellyfin match.
+
+Only Seerr **requester** tags are managed — label format `{userID}-{DisplayName}`
+(e.g. `1-richard`). Every other tag on an item is left untouched.
 
 ## How it works
 
 ```
-Jellyseerr → Radarr (tags: "13 - Alice")
+Jellyseerr → Radarr (requester tag: "1-richard")
                   │  webhook on Import/Upgrade
                   ▼
          localhost:5056
                   │  Jellyfin API
                   ▼
-              Jellyfin  (tags visible in UI)
+              Jellyfin  (tag visible in UI)
 ```
+
+On startup the bridge reconciles: for every Radarr movie / Sonarr series that has
+requester tags, it adds any missing ones to the matching Jellyfin item and removes
+any requester tags that are no longer on the *arr item. This catches anything the
+webhook missed (e.g. tags created before the retry fix).
+
+**Source of truth is *arr.** To remove a requester tag for good, remove it in
+Radarr/Sonarr (or Jellyseerr) — the next startup reconcile drops it from Jellyfin.
+Deleting it only in Jellyfin will re-add it.
 
 ## Setup
 
@@ -95,10 +109,17 @@ docker compose logs arr-tag-bridge | tail -10
 ```
 
 Should show:
+
 ```
 Radarr Download — 'Movie Title' (2024)
-Tags: ['13 - Alice']
+Requester tags: ['1-richard']
 ✓ Movie Title — 1 tag(s)
 ```
 
-Then in Jellyfin: movie → Edit Metadata → Tags → "13 - Alice" is there.
+Then in Jellyfin: movie → Edit Metadata → Tags → "1-richard" is there.
+
+On container start, look for the reconcile summary:
+
+```
+Startup backfill complete: 12 items, +3 tags, -1 tags
+```
