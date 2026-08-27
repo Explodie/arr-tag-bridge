@@ -333,7 +333,7 @@ def _backfill_reconcile() -> None:
 
 def _startup_backfill() -> None:
     """Give Jellyfin/*arr a moment to come up, then run the initial reconcile."""
-    time.sleep(20)
+    time.sleep(180)
     _backfill_reconcile()
 
 

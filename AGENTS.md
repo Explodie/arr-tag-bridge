@@ -29,7 +29,7 @@ regex `^\d+-`.
 ## Triggers
 
 1. **Webhook** — `/radarr`, `/sonarr` on `Download`/`Upgrade` events. Fast path.
-2. **Startup reconcile** — on boot (20s delay), walks all Radarr movies + Sonarr
+2. **Startup reconcile** — on boot (180s delay), walks all Radarr movies + Sonarr
    series and makes Jellyfin match: adds missing requester tags, removes stale
    requester tags.
 
